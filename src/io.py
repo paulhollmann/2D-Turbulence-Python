@@ -24,6 +24,20 @@ class netCDFwriter(object):
         self.w = self.data.createVariable('w','float32',('t','y','x'))
         self.w.setncattr('units','1/s')
 
+        # set up the velocity
+        self.u = self.data.createVariable('u', 'float32', ('t', 'y', 'x'))
+        self.u.setncattr('units', 'L/s')
+        self.v = self.data.createVariable('v', 'float32', ('t', 'y', 'x'))
+        self.v.setncattr('units', 'L/s')
+
+        # Laplacian of vorticity
+        self.lapw = self.data.createVariable('lapw', 'float32', ('t', 'y', 'x'))
+        self.lapw.setncattr('units', '1/s^3')
+
+        # forcing coefficient alpha (time dependent scalar)
+        self.alpha = self.data.createVariable('alpha', 'float32', ('t',))
+        self.alpha.setncattr('description', 'forcing coefficient')
+
         # counter
         self.c = 0
 
@@ -38,6 +52,19 @@ class netCDFwriter(object):
 
         # write vorticity
         self.w[self.c,:,:] = np.fft.irfft2(flow.wh, axes=(-2,-1))
+
+        # write velocity
+        flow.get_u()
+        flow.get_v()
+        self.u[self.c, :, :] = flow.u
+        self.v[self.c, :, :] = flow.v
+
+        # write Laplacian of vorticity
+        lapw = flow.get_laplace_w()
+        self.lapw[self.c, :, :] = lapw
+
+        # write forcing coefficient
+        self.alpha[self.c] = flow.alpha
 
         # update counter
         self.c += 1

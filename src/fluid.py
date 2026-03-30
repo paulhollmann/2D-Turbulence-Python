@@ -42,9 +42,22 @@ class Fluid(object):
         self.uptodate = False
         self.filterfac = 23.6
 
+        #foring params
+        self.forced = False
+        self.target_TKE = None
+        self.kf_min = 0               # forcing range wavenumber
+        self.kf_max = 0 
+        self.injection_tau = 0.0
+        self.alpha = 0.0              # forcing coefficient, computed at each time step based on TKE difference and dissipation
+
+        #damping params
+        self.dragged = False
+        self.kd_max = None     # cutoff for damping (low k)
+        self.drag_coeff = 0.0  # strength of damping
+
         self.FFTW = True
         self.fftw_num_threads = 6
-        self.forced = False
+        
 
         # we assume 2pi periodic domain in each dimensions
         self.x, self.dx = np.linspace(0, 2*np.pi, nx, endpoint=False, retstep=True)
@@ -117,6 +130,9 @@ class Fluid(object):
         self.psih = self._empty_imag()
         self.dwhdt = self._empty_imag()
 
+        self.lapw  = self._empty_real()   # Laplacian in physical space
+        self.lapwh = self._empty_imag()   # Laplacian in spectral space
+
         # assign padded arrays for non-linear term
         self.a  = self._empty_imag((self.mx,self.mk))
         self.a1 = self._empty_imag((self.mx,self.mk))
@@ -137,6 +153,8 @@ class Fluid(object):
 
         self.w_to_wh = pyfftw.FFTW(self.w,  self.wh, threads=self.fftw_num_threads,
                                    axes=(-2,-1))
+        self.lapwh_to_lapw = pyfftw.FFTW(self.lapwh, self.lapw, threads=self.fftw_num_threads, 
+                                         direction='FFTW_BACKWARD', axes=(-2, -1))
         self.wh_to_w = pyfftw.FFTW(self.wh,  self.w, threads=self.fftw_num_threads,
                                    direction='FFTW_BACKWARD', axes=(-2,-1))
         self.u_to_uh = pyfftw.FFTW(self.u,  self.uh, threads=self.fftw_num_threads,
@@ -145,8 +163,8 @@ class Fluid(object):
                                    direction='FFTW_BACKWARD', axes=(-2,-1))
         self.v_to_vh = pyfftw.FFTW(self.v,  self.vh, threads=self.fftw_num_threads,
                                    axes=(-2,-1))
-        self.f_to_fh = pyfftw.FFTW(self.f,  self.fh, threads=self.fftw_num_threads,
-                                   axes=(-2,-1))
+        #self.f_to_fh = pyfftw.FFTW(self.f,  self.fh, threads=self.fftw_num_threads,
+        #                           axes=(-2,-1))
         self.vh_to_v = pyfftw.FFTW(self.vh, self.v, threads=self.fftw_num_threads,
                                    direction='FFTW_BACKWARD', axes=(-2,-1))
         self.b_to_a = pyfftw.FFTW(self.b, self.a, threads=self.fftw_num_threads,
@@ -215,6 +233,17 @@ class Fluid(object):
         self.vh[:,:] = -1j*self.kx[:self.nk]*self.psih[:, :]
         self.vh_to_v()
     
+    def get_laplace_w(self):
+        """
+        Spectral Laplacian of vorticity:
+            ∇²ω_hat = - (k_x^2 + k_y^2) ω_hat
+
+        Returns ∇²ω in physical space.
+        """
+        self.lapwh[:, :] = -self.k2[:, :] * self.wh[:, :]
+        self.lapwh_to_lapw()
+        return self.lapw
+
     
     def _init_filter(self):
         """
@@ -238,15 +267,41 @@ class Fluid(object):
         self.dt = np.sqrt(3.) / (Dc + Dmu)
 
 
-    def _init_forcing(self, f):
-        if callable(f):
-            self.func = f
-            self.forced = True
+    #def _init_forcing(self, f):
+    #    if callable(f):
+    #        self.func = f
+    #        self.forced = True
 
 
-    def _add_forcing(self):
-        self.f[:, :] = self.func(self.x, self.y)
-        self.f_to_fh()
+    def init_spectral_forcing(self, target_TKE, kf_min, kf_max, injection_tau=0.9):
+        """
+        Force low wavenumbers to maintain approximately constant TKE.
+        
+        target_TKE : desired total kinetic energy
+        kf_min : forcing wavenumber range lower limit
+        kf_max : forcing wavenumber range upper limit
+        injection_tau: inverse scaling factor for TKE difference 
+        """
+        self.target_TKE = target_TKE
+        self.kf_min = kf_min
+        self.kf_max = kf_max
+        self.forced = True
+        self.injection_tau = injection_tau
+
+    def init_large_scale_damping(self, kd_max, drag_coeff):
+        """
+        Apply large-scale (low-k) linear damping (Ekman drag).
+
+        Parameters
+        ----------
+        kd_max : float
+            Maximum wavenumber for damping (i.e. damp k < kd_max)
+        drag_coeff : float
+            Damping coefficient (gamma)
+        """
+        self.kd_max = kd_max
+        self.drag_coeff = drag_coeff
+        self.dragged = True
 
 
     def update(self, s=3):
@@ -258,9 +313,10 @@ class Fluid(object):
             s : float
                 - desired order of the method, default is 3rd order
         """
-        # iniitalise field
-        if self.forced: self._add_forcing()
-        self.wh0[:, :] = self.wh[:, :] + self.fh[:, :]
+        self.wh0[:, :] = self.wh[:, :]
+
+        if self.forced:
+            self._compute_forcing_alpha()
 
         for k in range(s, 0, -1):
         # for t, v, d in zip([1.,.75,1./3.],[0.,.25,2./3.],[1.,.25,2./3.]):
@@ -272,6 +328,14 @@ class Fluid(object):
 
             # add diffusion
             self._add_diffusion()
+
+            # add large-scale damping
+            if self.dragged:
+                self._add_large_scale_damping()
+
+            if self.forced:
+                self._add_forcing()
+                self.dwhdt += self.fh
 
             # step in time
             self.wh[:, :] = self.wh0[:, :] + (self.dt/k) * self.dwhdt[:, :]
@@ -331,6 +395,46 @@ class Fluid(object):
         self.dwhdt[:, :] = self.dwhdt[:, :] - self.ReI*self.k2*self.wh[:, :]
 
 
+    def _add_large_scale_damping(self):
+        """
+        Apply linear damping to large scales (low k)
+            -gamma * omega_hat
+        """
+        kmod = np.sqrt(self.k2)
+        mask = (kmod > 0) & (kmod <= self.kd_max)
+
+        self.dwhdt[mask] -= self.drag_coeff * self.wh[mask]
+
+    def _compute_forcing_alpha(self):
+        """
+        Compute forcing coefficient alpha ONCE per timestep.
+        """
+        Energy = self.tke()
+        eps = self._compute_dissipation()
+
+        kmod = np.sqrt(self.k2)
+        mask = (kmod > self.kf_min) & (kmod <= self.kf_max)
+
+        dE = self.target_TKE - Energy
+        injection = eps + dE / self.injection_tau
+
+        Ef = 0.5 * _spec_variance((self.wh * mask) * np.sqrt(self.k2I))
+
+        if Ef > 1e-14:
+            self.alpha = injection / (2.0 * Ef)
+        else:
+            self.alpha = 0.0
+
+        self.forcing_mask = mask  # store mask for reuse
+
+    def _add_forcing(self):
+        """
+        Apply forcing using precomputed alpha.
+        """
+        self.fh[:, :] = 0.0
+        self.fh[self.forcing_mask] = self.alpha * self.wh[self.forcing_mask]
+
+
     def _add_spec_filter(self):
         self.dwhdt *= self.fltr
 
@@ -345,6 +449,23 @@ class Fluid(object):
         w = np.fft.irfft2(wh,axes=(-2,-1))
         eps = .5*abs(w)**2
         return eps.sum(axis=(-2,-1))
+
+    def _compute_dissipation(self):
+        """
+        epsilon = nu*SUM(|omega|^2)
+        consistent with spectral variance normalization
+        """
+        return self.ReI * _spec_variance(self.wh).sum()
+    
+
+    def _compute_drag_dissipation(self):
+        if not self.dragged:
+            return 0.0
+
+        kmod = np.sqrt(self.k2)
+        mask = (kmod > 0) & (kmod <= self.kd_max)
+
+        return self.drag_coeff * _spec_variance(self.wh * mask).sum()
 
 
     def _compute_spectrum(self, res):
@@ -361,36 +482,47 @@ class Fluid(object):
             self.E[i] += np.sum(tke[(kmod<self.k[i]+dk) & (kmod>=self.k[i]-dk)])
 
     
-    def plot_spec(self, res=200):
+    def plot_spec(self, res=200, show=True):
         self._compute_spectrum(200)
-        plt.figure(figsize=(6,6))
+        fig = plt.figure(figsize=(6,6))
         plt.loglog(self.k, self.E, '-k', label="E(k)")
         plt.xlabel("k")
         plt.ylabel("E(k)")
         plt.legend()
-        plt.show()
+        if show:
+            plt.show()
+        else:
+            return fig
 
 
     def write(self, file):
-        if(not self.write_enable): self.init_writer(file)
+        if(not self.write_enable): 
+            self.init_writer(file)
         self.writer.add(self)
-    
+
 
     def init_writer(self, name):
-       self.writer = netCDFwriter(name, self)
-       self.write_enable = True
+        self.writer = netCDFwriter(name, self)
+        self.write_enable = True
 
 
-    def display(self, complex=False, u_e=None):
-        u = self.w
+    def display(self, complex=False, u_e=None, show=True):
         if complex:
             u = np.real(self.wh)
-        if not np.any(u_e)==None:
-            u -= u_e
-        p=plt.imshow(u, cmap="RdBu_r")
+        else:
+            # Compute w on the fly from wh (inverse FFT)
+            u = np.fft.irfft2(self.wh, axes=(-2, -1))
+
+        if u_e is not None:
+            u = u - u_e
+        fig = plt.figure()
+        p = plt.imshow(u, cmap="RdBu_r")
         plt.colorbar(p)
         # plt.xticks([]); plt.yticks([])
-        plt.show()
+        if show:
+            plt.show()
+        else:
+            return fig
 
 
     def display_vel(self):
@@ -425,6 +557,65 @@ class Fluid(object):
                 print("Iteration \t %d, time \t %f, time remaining \t %f. TKE: %f" %(self.it,
                       self.time, stop-self.time, self.tke()))
 
+
+
+    def compute_initial_tke(self, func, **kwargs):
+        """
+        Initialize the field with `func` temporarily and return its TKE 
+        without updating any solver state.
+        
+        Parameters
+        ----------
+        func : callable
+            Function that generates the initial vorticity field.
+        **kwargs : dict
+            Extra arguments to pass to func(x, y, Re, **kwargs)
+        
+        Returns
+        -------
+        tke0 : float
+            TKE of the initial field.
+        """
+        # Temporary backup of solver state
+        w_backup = self.w.copy()
+        wh_backup = self.wh.copy()
+        psih_backup = self.psih.copy()
+        # Initialize field
+        self.w[:,:] = func(self.x, self.y, self.Re, **kwargs)
+        self.w_to_wh()        # update spectral vorticity
+        self._get_psih()      # update stream function in spectral space
+        # Compute TKE
+        tke0 = self.tke()
+        # Restore previous field
+        self.w[:,:] = w_backup
+        self.wh[:,:] = wh_backup
+        self.psih[:,:] = psih_backup
+        return tke0
+
+    def print_solver_params(self):
+        print(self.get_solver_params())
+
+    def get_solver_params(self):
+        """
+        Return all relevant solver parameters as a formatted string.
+        """
+        s = []
+        s.append("\n--- Fluid Solver Parameters ---")
+        s.append(f"Grid: nx = {self.nx}, ny = {self.ny}, nk = {self.nk}")
+        s.append(f"Reynolds number: Re = {self.Re}, nu = {1/self.Re if self.Re!=0 else 0}")
+        s.append(f"Time-step (dt) = {self.dt:.6e}")
+        s.append(f"Time = {self.time:.6f}, Iteration = {self.it}")
+        s.append(f"Padding factor = {self.pad}")
+        s.append(f"FFT enabled: {self.FFTW}, FFTW threads = {self.fftw_num_threads}")
+        s.append(f"Numerical order: {getattr(self, 'order', 'not initialized')}")
+        s.append(f"Spectral filter factor = {self.filterfac}")
+        s.append(f"Target TKE = {self.target_TKE}, forcing kf = [{self.kf_min}-{self.kf_max}], forced = {self.forced}")
+        s.append(f"Dragging kd = [{0}-{self.kd_max}], dragged = {self.dragged}, drag coeff = {self.drag_coeff}")
+        s.append(f"Write enabled = {self.write_enable}")
+        s.append(f"Max x-step = {self.dx:.6e}, Max y-step = {self.dy:.6e}")
+        s.append("--- End of Parameters ---\n")
+
+        return "\n".join(s)   
 
 # if __name__=="__main__":
 #     flow = Fluid(128, 128, 1)
