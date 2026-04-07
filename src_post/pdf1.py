@@ -39,7 +39,7 @@ def compute_pdf1(input_file, bins=100):
 
     # ---- bin edges + centers ----
     edges = np.linspace(wmin, wmax, bins + 1)
-    centers = 0.5 * (edges[:-1] + edges[1:])   # ✅ FIX
+    centers = 0.5 * (edges[:-1] + edges[1:])   
 
     # ---- output file ----
     dirname = os.path.dirname(input_file)
@@ -57,8 +57,8 @@ def compute_pdf1(input_file, bins=100):
     t_out = out.createVariable('t', 'float32', ('t',))
     pdf = out.createVariable('pdf', 'float32', ('t', 'b'))
 
-    bins_centers_out = out.createVariable('bins', 'float32', ('b',))       # ✅ centers
-    bins_edges_out   = out.createVariable('bin_edges', 'float32', ('b_edges',))  # optional
+    bins_centers_out = out.createVariable('bins', 'float32', ('b',))      
+    bins_edges_out   = out.createVariable('bin_edges', 'float32', ('b_edges',))  
 
     # metadata
     pdf.setncattr('description', '1-point PDF of vorticity')

@@ -56,7 +56,7 @@ class Fluid(object):
         self.drag_coeff = 0.0  # strength of damping
 
         self.FFTW = True
-        self.fftw_num_threads = 6
+        self.fftw_num_threads = 12
         
 
         # we assume 2pi periodic domain in each dimensions
@@ -147,7 +147,7 @@ class Fluid(object):
         self.b4 = self._empty_real((self.mx,self.my))
         
         # for fast transform
-        # pyfftw.interfaces.cache.enable()
+        #pyfftw.interfaces.cache.enable()
         pyfftw.config.NUM_THREADS = self.fftw_num_threads
         pyfftw.config.PLANNER_EFFORT = 'FFTW_MEASURE'
 
@@ -288,6 +288,10 @@ class Fluid(object):
         self.forced = True
         self.injection_tau = injection_tau
 
+        kmod = np.sqrt(self.k2)
+        mask = (kmod > self.kf_min) & (kmod <= self.kf_max)
+        self.forcing_mask = mask  # store mask for reuse
+
     def init_large_scale_damping(self, kd_max, drag_coeff):
         """
         Apply large-scale (low-k) linear damping (Ekman drag).
@@ -302,6 +306,10 @@ class Fluid(object):
         self.kd_max = kd_max
         self.drag_coeff = drag_coeff
         self.dragged = True
+
+        kmod = np.sqrt(self.k2)
+        mask = (kmod > 0) & (kmod <= self.kd_max)
+        self.damping_mask = mask  # store mask for reuse
 
 
     def update(self, s=3):
@@ -400,9 +408,7 @@ class Fluid(object):
         Apply linear damping to large scales (low k)
             -gamma * omega_hat
         """
-        kmod = np.sqrt(self.k2)
-        mask = (kmod > 0) & (kmod <= self.kd_max)
-
+        mask = self.damping_mask
         self.dwhdt[mask] -= self.drag_coeff * self.wh[mask]
 
     def _compute_forcing_alpha(self):
@@ -412,9 +418,7 @@ class Fluid(object):
         Energy = self.tke()
         eps = self._compute_dissipation()
 
-        kmod = np.sqrt(self.k2)
-        mask = (kmod > self.kf_min) & (kmod <= self.kf_max)
-
+        mask = self.forcing_mask
         dE = self.target_TKE - Energy
         injection = eps + dE / self.injection_tau
 
@@ -425,7 +429,7 @@ class Fluid(object):
         else:
             self.alpha = 0.0
 
-        self.forcing_mask = mask  # store mask for reuse
+        
 
     def _add_forcing(self):
         """
@@ -501,8 +505,8 @@ class Fluid(object):
         self.writer.add(self)
 
 
-    def init_writer(self, name):
-        self.writer = netCDFwriter(name, self)
+    def init_writer(self, name, downsample):
+        self.writer = netCDFwriter(name, self, downsample=downsample)
         self.write_enable = True
 
 

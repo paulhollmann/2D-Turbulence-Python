@@ -17,7 +17,7 @@ def vorticity_to_movie(input_file, output_file="vorticity.mp4", fps=30, dpi=150,
     Make a movie of the 2D vorticity field from a fluid.nc file.
     Colormap is centered at zero (white = 0).
     """
-
+    print(f"[Vorticity] Dataset: {input_file}")
     # ---- open the data ----
     data = Dataset(input_file, 'r')
     w = data.variables['w'][:]       # shape: (t, y, x)

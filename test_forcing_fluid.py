@@ -16,8 +16,8 @@ timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 data_folder = f"data_{timestamp}"
 os.makedirs(data_folder, exist_ok=True)
 
-nx = 384
-ny = 384
+nx = 512
+ny = 512
 Re = 360.0  
 # should be ok for 256x256. nu = 1/Re = 0.005
 # Re_lambda ca 60–70 depending on initialization
@@ -30,6 +30,7 @@ flow.init_field(McWilliams)
 init_tke = flow.compute_initial_tke(McWilliams)*0.99
 #flow.init_spectral_forcing(target_TKE=init_tke, injection_tau=0.6, kf_min=15, kf_max=40)
 #flow.init_large_scale_damping(kd_max=2, drag_coeff=0.15)
+flow.init_writer(name=f"{data_folder}/fluid", downsample=1)
 
 flow.print_solver_params()
 with open(f"{data_folder}/_params.txt", "w") as f:
