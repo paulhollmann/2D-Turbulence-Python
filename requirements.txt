@@ -3,3 +3,4 @@ matplotlib
 netcdf4
 pyfftw
 imageio[ffmpeg]
+numba

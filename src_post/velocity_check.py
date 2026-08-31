@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from matplotlib.animation import FFMpegWriter, PillowWriter
 
+
+
 def vorticity_check_movie(input_file, output_file="vorticity_check.mp4", fps=30, dpi=150, cmap="bwr"):
     """
     Create a movie comparing:

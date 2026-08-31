@@ -69,3 +69,113 @@ def vorticity_to_movie(input_file, output_file="vorticity.mp4", fps=30, dpi=150,
 
     data.close()
     plt.close(fig)
+
+
+def get_vorticity_minmax(input_file, target_time):
+    """
+    Returns (t_closest, min, max) of vorticity field at closest timestep.
+    """
+    data = Dataset(input_file, 'r')
+    
+    t = data.variables['t'][:]
+
+    # ---- find closest timestep ----
+    idx = np.argmin(np.abs(t - target_time))
+    t_closest = t[idx]
+
+    w_slice = data.variables['w'][idx, :, :]
+    w_min = np.min(w_slice)
+    w_max = np.max(w_slice)
+
+    print(f"[MinMax] requested t={target_time:.4f}, using t={t_closest:.4f} (idx={idx})")
+    print(f"[MinMax] min={w_min:.5e}, max={w_max:.5e}")
+
+    data.close()
+    return t_closest, w_min, w_max
+
+def save_vorticity_snapshot_pub(input_file, target_time, output_path,
+                                vmin=None, vmax=None,
+                                cmap="RdBu_r",
+                                dpi=300):
+    """
+    Save a publication-quality vorticity snapshot.
+    """
+
+    # ---- matplotlib styling (publication standard) ----
+    plt.rcParams.update({
+        "font.family": "serif",
+        "font.size": 11,
+        "axes.labelsize": 12,
+        "axes.titlesize": 12,
+        "xtick.labelsize": 10,
+        "ytick.labelsize": 10,
+        "legend.fontsize": 10,
+        "ps.fonttype": 42,   
+        "pdf.fonttype": 42,
+    })
+
+    data = Dataset(input_file, 'r')
+    
+    w = data.variables['w']
+    t = data.variables['t'][:]
+    alpha = data.variables['alpha'][:] if 'alpha' in data.variables else None
+
+    # ---- closest timestep ----
+    idx = np.argmin(np.abs(t - target_time))
+    t_closest = t[idx]
+    w_slice = w[idx, :, :]   # efficient slicing
+
+    print(f"[Snapshot] using t={t_closest:.4f} (idx={idx})")
+
+    # ---- color scaling ----
+    if vmin is None or vmax is None:
+        wmax_abs = np.max(np.abs(w_slice))
+        vmin, vmax = -wmax_abs, wmax_abs
+
+    # ---- figure ----
+    fig, ax = plt.subplots(figsize=(5.5, 4.5))  # good for papers
+
+    img = ax.imshow(
+        w_slice,
+        vmin=vmin, vmax=vmax,
+        cmap=cmap,
+        origin='lower',
+        aspect='auto',
+        interpolation='none'  # avoid smoothing artifacts
+    )
+
+    # ---- colorbar ----
+    cbar = fig.colorbar(img, ax=ax, pad=0.02)
+    cbar.set_label(r"Vorticity $\omega$")
+
+    # ---- labels ----
+    ax.set_xlabel(None)
+    ax.set_ylabel(None)
+
+    # minimal but informative title
+    title = rf"$t = {np.round(t_closest, 1)}$"
+    if alpha is not None:
+        title += rf", $\alpha = {alpha[idx]:.1f}$"
+    ax.set_title(title)
+
+    # ---- clean layout ----
+    ax.tick_params(direction='in', top=True, right=True)
+    
+    # optional: remove if domain is not meaningful
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    plt.tight_layout()
+
+    # ---- save ----
+    plt.savefig(
+        output_path,
+        format="eps",
+        dpi=dpi,
+        bbox_inches="tight"
+    )
+    plt.close(fig)
+
+    print(f"[Snapshot] saved (publication): {output_path}")
+
+    data.close()

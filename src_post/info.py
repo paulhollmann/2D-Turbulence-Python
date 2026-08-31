@@ -1,9 +1,4 @@
 from netCDF4 import Dataset
-import xarray as xr
-import numpy as np
-import dask.array as da
-from dask.diagnostics import ProgressBar
-import matplotlib.pyplot as plt
 
 
 path = 'P:\\git\\2D-Turbulence-Python\\data_2026-04-03_11-00-34\\'
